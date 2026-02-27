@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:math';
 import 'dart:io';
+import 'package:Solido/db.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:image_picker/image_picker.dart';
@@ -10,6 +11,7 @@ void main() {
 }
 
 class Producto {
+  int? id;
   String nombre;
   String valor;
   String detalle;
@@ -19,6 +21,7 @@ class Producto {
   String colorCard;
 
   Producto({
+    this.id,
     required this.nombre,
     required this.valor,
     required this.detalle,
@@ -29,23 +32,25 @@ class Producto {
   });
 
   Map<String, dynamic> toJson() => {
-    'nombre': nombre,
-    'valor': valor,
-    'detalle': detalle,
-    'fechaEntrega': fechaEntrega,
-    'color': color,
-    'imagen': imagen,
-    'colorCard': colorCard,
+    "id": id,
+    "nombre": nombre,
+    "valor": valor,
+    "detalle": detalle,
+    "fechaEntrega": fechaEntrega,
+    "color": color,
+    "imagen": imagen,
+    "colorCard": colorCard,
   };
 
   factory Producto.fromJson(Map<String, dynamic> json) => Producto(
-    nombre: json['nombre'],
-    valor: json['valor'],
-    detalle: json['detalle'],
-    fechaEntrega: json['fechaEntrega'],
-    color: json['color'],
-    imagen: json['imagen'],
-    colorCard: json['colorCard'],
+    id: json["id"],
+    nombre: json["nombre"],
+    valor: json["valor"],
+    detalle: json["detalle"],
+    fechaEntrega: json["fechaEntrega"],
+    color: json["color"],
+    imagen: json["imagen"],
+    colorCard: json["colorCard"],
   );
 }
 
@@ -72,17 +77,14 @@ class _ListaProductosState extends State<ListaProductos> {
   List<Producto> productos = [];
 
   final colores = [
-    Color(0xFF00E5FF), // neon cyan
     Color(0xFF00FF94), // neon green
     Color(0xFFFF00E5), // neon pink
-    Color(0xFFFFEA00), // neon yellow
-    Color(0xFF7C4DFF), // neon purple
+    Color.fromARGB(87, 143, 135, 48), // neon yellow
     Color(0xFFFF3D00), // neon orange
     Color(0xFF00B0FF), // neon blue
-    Color(0xFF1DE9B6),
-    Color(0xFFD500F9),
-    Color(0xFFFF1744),
-    Color(0xFF76FF03),
+    Color.fromARGB(255, 6, 81, 62),
+    Color.fromARGB(141, 168, 22, 194),
+    Color.fromARGB(255, 122, 7, 30),
   ];
 
   Color colorDesdeString(String c) {
@@ -158,30 +160,43 @@ class _ListaProductosState extends State<ListaProductos> {
     );
   }
 
+  Future<void> actualizarProducto(Producto p) async {
+    final db = await DB.database;
+    await db.update("pedidos", p.toJson(), where: "id=?", whereArgs: [p.id]);
+  }
+
   @override
   void initState() {
     super.initState();
     cargar();
   }
 
-  Future<void> guardar() async {
-    final prefs = await SharedPreferences.getInstance();
-    List<String> data = productos.map((e) => jsonEncode(e.toJson())).toList();
-    await prefs.setStringList('productos', data);
+  Future<void> guardar(BuildContext context, Producto p) async {
+    final db = await DB.database;
+    p.id = await db.insert("pedidos", p.toJson());
+  }
+
+  Future<void> eliminarDB(int id) async {
+    final db = await DB.database;
+    await db.delete("pedidos", where: "id=?", whereArgs: [id]);
   }
 
   Future<void> cargar() async {
-    final prefs = await SharedPreferences.getInstance();
-    List<String>? data = prefs.getStringList('productos');
+    final db = await DB.database;
+    final data = await db.query("pedidos");
 
-    if (data != null) {
-      setState(() {
-        productos = data.map((e) => Producto.fromJson(jsonDecode(e))).toList();
-      });
+    productos = data.map((e) => Producto.fromJson(e)).toList();
+
+    for (int i = 0; i < productos.length; i++) {
+      listKey.currentState?.insertItem(i);
     }
+
+    setState(() {});
   }
 
   void abrirModal({Producto? producto, int? index}) {
+    final colorCard = producto?.colorCard ?? randomColor(); // 👈 SOLO UNA VEZ
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -207,17 +222,19 @@ class _ListaProductosState extends State<ListaProductos> {
           child: FormProducto(
             producto: producto,
             colorCard: producto?.colorCard ?? randomColor(),
-            onGuardar: (p) {
-              setState(() {
-                if (index != null) {
-                  productos[index] = p;
-                } else {
+            onGuardar: (p) async {
+              if (index != null) {
+                await actualizarProducto(p);
+                setState(() => productos[index] = p);
+              } else {
+                await guardar(context, p);
+                setState(() {
                   productos.add(p);
                   listKey.currentState!.insertItem(productos.length - 1);
-                }
-              });
-              guardar();
-              Navigator.pop(context);
+                });
+              }
+
+              Navigator.pop(context); // 👈 CIERRE SEGURO
             },
           ),
         );
@@ -227,8 +244,10 @@ class _ListaProductosState extends State<ListaProductos> {
 
   final GlobalKey<AnimatedListState> listKey = GlobalKey();
 
-  void eliminar(int index) {
+  void eliminar(int index) async {
     final eliminado = productos[index];
+
+    await eliminarDB(eliminado.id!);
 
     productos.removeAt(index);
 
@@ -243,8 +262,6 @@ class _ListaProductosState extends State<ListaProductos> {
       ),
       duration: const Duration(milliseconds: 400),
     );
-
-    guardar();
   }
 
   @override
@@ -324,6 +341,8 @@ class _FormProductoState extends State<FormProducto> {
   }
 
   void guardar() {
+    FocusScope.of(context).unfocus(); // 👈 cierra teclado
+
     final p = Producto(
       nombre: nombre.text,
       valor: valor.text,
@@ -333,6 +352,7 @@ class _FormProductoState extends State<FormProducto> {
       imagen: imagen,
       colorCard: widget.colorCard,
     );
+
     widget.onGuardar(p);
   }
 
